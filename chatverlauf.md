@@ -99,3 +99,104 @@ Füge niederländisch hinzu
 Niederländisch ist vollständig ergänzt. Nach einem Neustart erscheint **Nederlands** unter **Einstellungen → Sprache**.
 
 Alle acht Tests bestehen, einschließlich der Prüfung aller Übersetzungsschlüssel und Platzhalter.
+
+
+## 5. About-Dialog ergänzen
+
+### Benutzer · 07:55
+
+Ein About Dialog einbauen der den Author angibt:
+
+Python User Group
+
+pySpaceBremen
+
+[https://pyspacebremen.de](https://pyspacebremen.de)
+
+Software Website:
+
+[https://github.com/pyspacebremen/spacesync](https://github.com/pyspacebremen/spacesync)
+
+### Assistent · 07:55
+
+*Dauer: 27 Sek.*
+
+Unter **Hilfe → Über SpaceSync** gibt es jetzt einen Dialog mit **Python User Group / pySpaceBremen** und beiden anklickbaren Website-Links.
+
+Der Dialog ist auf Deutsch, Englisch und Niederländisch verfügbar. Alle acht Tests bestehen.
+
+#### Angezeigte Dateiänderungen
+
+| Datei | Hinzugefügt | Entfernt |
+| --- | ---: | ---: |
+| `spacesync.py` | 30 | 0 |
+
+## 6. Bedienungsanleitung und PDF-Export hinzufügen
+
+### Benutzer · 08:01
+
+Ein Hilfe Menü Item soll die Bedienungsanleitung enthalten. Es soll jeweils die ausgewählte Sprache angezeigt werden. Im diesen Dialog kann dann auch ein PDF export für diese Beschreibung ausgelöst werden
+
+### Assistent · 08:03
+
+*Dauer: 2 Min. 16 Sek.*
+
+Unter **Hilfe → Bedienungsanleitung** erscheint jetzt die Anleitung in der ausgewählten Sprache: Deutsch, Englisch oder Niederländisch. Im Dialog speichert **Als PDF exportieren …** denselben Text als PDF.
+
+Für den Export wird ReportLab benötigt:
+
+```sh
+python3 -m pip install -r requirements.txt
+```
+
+Alle zehn Tests bestehen. Die PDFs wurden in allen drei Sprachen erzeugt und visuell geprüft.
+
+#### Angezeigte Dateiänderungen
+
+4 Dateien bearbeitet: **+141 / −2**.
+
+| Datei | Hinzugefügt | Entfernt |
+| --- | ---: | ---: |
+| `README.md` | 11 | 1 |
+| `requirements.txt` | 1 | 0 |
+| `spacesync.py` | 98 | 0 |
+
+*Eine weitere Datei war in der kopierten Ansicht ausgeblendet.*
+
+## 7. Kommandozeile und Headless-Ausführung ergänzen
+
+### Benutzer · 08:10
+
+Es soll ein Commandlien Interface geben in dem ich alle Parameter angeben kann und eine Ausführung headless zulässt. Wenn keine Parameter sondern nur das z.B. das erstellen oder archiven angegben wird sollen die restlichen parameter aus der persistieren json Datei entnommen werden. Bedienungsanleitung erweitern.
+
+### Assistent · 08:14
+
+*Dauer: 3 Min. 38 Sek.*
+
+Das CLI ist eingebaut. Nur mit Aktion werden die gespeicherten Einstellungen verwendet:
+
+```sh
+python3 spacesync.py archive
+python3 spacesync.py extract
+```
+
+Einzelne Werte lassen sich überschreiben:
+
+```sh
+python3 spacesync.py archive --archive backup.zip --directory ./daten
+python3 spacesync.py extract --directory ./ziel --no-clear
+python3 spacesync.py --help
+```
+
+Ohne Argumente startet weiterhin die GUI. CLI-Ausführungen laufen ohne Fenster und Rückfragen; ein gespeichertes `clear=true` leert das Ziel. Einstellungen werden nur mit `--save-settings` geändert.
+
+Die Anleitung wurde in allen drei Sprachen erweitert, einschließlich PDF-Export. Alle 15 Tests bestehen; die PDFs wurden visuell geprüft.
+
+#### Angezeigte Dateiänderungen
+
+2 Dateien bearbeitet: **+93 / −3**.
+
+| Datei | Hinzugefügt | Entfernt |
+| --- | ---: | ---: |
+| `spacesync.py` | 4 | 2 |
+| `tests/test_spacesync.py` | 89 | 1 |
