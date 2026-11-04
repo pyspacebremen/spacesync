@@ -1,19 +1,17 @@
 """ZIP-Archive und Verzeichnisse mit einer Tkinter-Oberfläche abgleichen."""
 from pathlib import Path
 import json
+import argparse
 import locale
 import os
 import plistlib
-import queue
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
-import threading
-import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
 import zipfile
+from xml.sax.saxutils import escape
 
 
 SETTINGS_PATH = Path(__file__).resolve().with_name('spacesync.json')
@@ -65,6 +63,60 @@ class Translator:
 
 translator = Translator(LANGUAGES_PATH)
 tr = translator
+
+
+MANUAL_SECTIONS = ('paths', 'archive', 'extract', 'clear', 'settings', 'messages', 'pdf', 'cli')
+
+
+def manual_sections(translate):
+    return [(translate(f'manual_{key}_heading'), translate(f'manual_{key}_body'))
+            for key in MANUAL_SECTIONS]
+
+
+def export_manual_pdf(path, translate):
+    # Optional dependency: the application and manual also work without ReportLab.
+    import reportlab
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+
+    fonts = Path(reportlab.__file__).parent / 'fonts'
+    for name, filename in [('Manual', 'Vera.ttf'), ('ManualBold', 'VeraBd.ttf')]:
+        if name not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(TTFont(name, str(fonts / filename)))
+    styles = getSampleStyleSheet()
+    for name in ('Title', 'Heading2', 'BodyText'):
+        styles[name].fontName = 'ManualBold' if name != 'BodyText' else 'Manual'
+    styles['BodyText'].fontSize = 10
+    styles['BodyText'].leading = 15
+    styles['Heading2'].textColor = colors.HexColor('#234963')
+    story = [Paragraph(escape('SpaceSync - ' + translate('manual_title')), styles['Title']), Spacer(1, 12)]
+    for index, (heading, body) in enumerate(manual_sections(translate)):
+        if MANUAL_SECTIONS[index] == 'cli':
+            story.append(PageBreak())
+        story.extend([Paragraph(escape(heading), styles['Heading2']),
+                      Paragraph(escape(body).replace('\n', '<br/>'), styles['BodyText']), Spacer(1, 8)])
+
+    def footer(canvas, document):
+        canvas.setFont('Manual', 8)
+        canvas.drawString(42, 25, 'SpaceSync | pySpaceBremen')
+        canvas.drawRightString(A4[0] - 42, 25, str(document.page))
+
+    path = Path(path)
+    handle, temporary = tempfile.mkstemp(dir=path.parent, suffix='.pdf')
+    os.close(handle)
+    try:
+        SimpleDocTemplate(temporary, pagesize=A4, rightMargin=42, leftMargin=42,
+                          topMargin=40, bottomMargin=44,
+                          title='SpaceSync - ' + translate('manual_title'),
+                          author='Python User Group pySpaceBremen').build(
+                              story, onFirstPage=footer, onLaterPages=footer)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def load_settings(path):
@@ -154,181 +206,80 @@ def extract_archive(archive, directory, clear, log):
     log(tr('complete', directory=directory))
 
 
-class SpaceSync(tk.Tk):
-    def __init__(self):
-        super().__init__()
-        self.text_variables = {}
-        self.title(tr('title'))
-        self.geometry('980x440')
-        self.minsize(780, 350)
-        self.events = queue.Queue()
-        self.archive = tk.StringVar()
-        self.directory = tk.StringVar()
-        self.clear = tk.BooleanVar()
-        self.settings_timer = None
-        self.language = tk.StringVar(value='')
-        try:
-            settings = load_settings(SETTINGS_PATH)
-            self.language.set(settings.get('language', ''))
-            translator.select(self.language.get())
-            self.archive.set(settings.get('archive', ''))
-            self.directory.set(settings.get('directory', ''))
-            self.clear.set(settings.get('clear', False))
-        except (OSError, ValueError) as error:
-            self.events.put(('log', tr('load_error', error=error)))
-        for variable in (self.archive, self.directory, self.clear, self.language):
-            variable.trace_add('write', self.schedule_settings_save)
-        self.busy = False
-        self.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
-        self.rowconfigure(0, weight=1)
-        controls = ttk.Frame(self, padding=18)
-        controls.grid(row=0, column=0, sticky='nsew')
-        controls.columnconfigure(0, weight=1)
-        ttk.Label(controls, textvariable=self.text('archive_label')).grid(row=0, column=0, sticky='w')
-        ttk.Entry(controls, textvariable=self.archive).grid(row=1, column=0, sticky='ew', pady=6)
-        ttk.Button(controls, textvariable=self.text('browse'), command=self.choose_archive).grid(row=1, column=1, padx=(8, 0))
-        actions = ttk.Frame(controls)
-        actions.grid(row=2, column=0, columnspan=2, pady=18)
-        self.up = ttk.Button(actions, textvariable=self.text('create'), command=lambda: self.start(True))
-        self.up.pack(fill='x', pady=4)
-        self.down = ttk.Button(actions, textvariable=self.text('extract'), command=lambda: self.start(False))
-        self.down.pack(fill='x', pady=4)
-        ttk.Label(controls, textvariable=self.text('directory_label')).grid(row=3, column=0, columnspan=2, sticky='w')
-        ttk.Entry(controls, textvariable=self.directory).grid(row=4, column=0, sticky='ew', pady=6)
-        ttk.Button(controls, textvariable=self.text('browse'), command=self.choose_directory).grid(row=4, column=1, padx=(8, 0))
-        ttk.Checkbutton(controls, textvariable=self.text('clear_label'), variable=self.clear).grid(row=5, column=0, columnspan=2, sticky='w', pady=10)
-        ttk.Label(controls, textvariable=self.text('keep_hint'), wraplength=390).grid(row=6, column=0, columnspan=2, sticky='w')
-        panel = ttk.LabelFrame(self, padding=8)
-        panel.configure(labelwidget=ttk.Label(panel, textvariable=self.text('log_label')))
-        panel.grid(row=0, column=1, sticky='nsew', padx=(0, 18), pady=18)
-        self.output = scrolledtext.ScrolledText(panel, state='disabled', width=45, wrap='word')
-        self.output.pack(fill='both', expand=True)
-        self.build_menu()
-        self.refresh_language()
-        self.protocol('WM_DELETE_WINDOW', self.close)
-        self.after(100, self.poll)
+def build_parser():
+    parser = argparse.ArgumentParser(description=tr('cli_description'))
+    parser.add_argument('action', nargs='?',
+                        choices=['archive', 'create', 'extract', 'unpack', 'manual'],
+                        help=tr('cli_action'))
+    parser.add_argument('-a', '--archive', help=tr('cli_archive'))
+    parser.add_argument('-d', '--directory', help=tr('cli_directory'))
+    clear = parser.add_mutually_exclusive_group()
+    clear.add_argument('--clear', dest='clear', action='store_true', default=None,
+                       help=tr('cli_clear'))
+    clear.add_argument('--no-clear', dest='clear', action='store_false', help=tr('cli_no_clear'))
+    parser.add_argument('--language', choices=['system', *translator.languages], help=tr('cli_language'))
+    parser.add_argument('--config', type=Path, default=SETTINGS_PATH, help=tr('cli_config'))
+    parser.add_argument('--save-settings', action='store_true', help=tr('cli_save_settings'))
+    parser.add_argument('--headless', action='store_true', help=tr('cli_headless'))
+    parser.add_argument('--pdf', type=Path, help=tr('cli_pdf'))
+    return parser
 
-    def text(self, key):
-        variable = tk.StringVar(value=tr(key))
-        self.text_variables.setdefault(key, []).append(variable)
-        return variable
 
-    def build_menu(self):
-        menu = tk.Menu(self)
-        settings = tk.Menu(menu, tearoff=False)
-        languages = tk.Menu(settings, tearoff=False)
-        languages.add_radiobutton(label=tr('system_language'), variable=self.language,
-                                 value='', command=self.refresh_language)
-        for code, data in translator.languages.items():
-            languages.add_radiobutton(label=data['name'], variable=self.language,
-                                     value=code, command=self.refresh_language)
-        settings.add_cascade(label=tr('language_menu'), menu=languages)
-        menu.add_cascade(label=tr('settings_menu'), menu=settings)
-        self.configure(menu=menu)
-        self.menu_bar, self.settings_menu, self.language_menu = menu, settings, languages
-
-    def refresh_language(self):
-        translator.select(self.language.get())
-        self.title(tr('title'))
-        for key, variables in self.text_variables.items():
-            for variable in variables:
-                variable.set(tr(key))
-        self.menu_bar.entryconfigure(0, label=tr('settings_menu'))
-        self.settings_menu.entryconfigure(0, label=tr('language_menu'))
-        self.language_menu.entryconfigure(0, label=tr('system_language'))
-
-    def schedule_settings_save(self, *_):
-        if self.settings_timer is not None:
-            self.after_cancel(self.settings_timer)
-        self.settings_timer = self.after(500, self.persist_settings)
-
-    def persist_settings(self):
-        if self.settings_timer is not None:
-            self.after_cancel(self.settings_timer)
-            self.settings_timer = None
-        try:
-            save_settings(SETTINGS_PATH, {
-                'archive': self.archive.get(),
-                'directory': self.directory.get(),
-                'clear': self.clear.get(),
-                'language': self.language.get(),
-            })
-        except OSError as error:
-            self.events.put(('log', tr('save_error', error=error)))
-            return False
-        return True
-
-    def choose_archive(self):
-        path = filedialog.asksaveasfilename(title=tr('choose_archive'), defaultextension='.zip', filetypes=[(tr('zip_files'), '*.zip')], confirmoverwrite=False)
-        if path:
-            self.archive.set(path)
-
-    def choose_directory(self):
-        path = filedialog.askdirectory(title=tr('choose_directory'), mustexist=False)
-        if path:
-            self.directory.set(path)
-
-    def start(self, upwards):
-        if self.busy:
-            return
-        if not self.archive.get().strip() or not self.directory.get().strip():
-            messagebox.showerror(tr('missing_path'), tr('enter_paths'))
-            return
-        archive = Path(self.archive.get().strip()).expanduser()
-        directory = Path(self.directory.get().strip()).expanduser()
-        clear = self.clear.get()
-        if upwards and archive.exists():
-            if not messagebox.askyesno(tr('replace_title'), tr('replace_question', archive=archive)):
-                return
-        if not upwards and clear:
-            if not messagebox.askyesno(tr('clear_title'), tr('clear_question', directory=directory), icon='warning'):
-                return
-        self.busy = True
-        self.up.state(['disabled'])
-        self.down.state(['disabled'])
-        self.events.put(('log', tr('creating') if upwards else tr('extracting')))
-
-        def work():
-            try:
-                log = lambda text: self.events.put(('log', text))
-                if upwards:
-                    create_archive(archive, directory, log)
-                else:
-                    extract_archive(archive, directory, clear, log)
-            except Exception as error:
-                self.events.put(('log', tr('error', error=error)))
-            finally:
-                self.events.put(('done', ''))
-        threading.Thread(target=work, daemon=True).start()
-
-    def poll(self):
-        for _ in range(200):
-            try:
-                kind, text = self.events.get_nowait()
-            except queue.Empty:
-                break
-            if kind == 'done':
-                self.busy = False
-                self.up.state(['!disabled'])
-                self.down.state(['!disabled'])
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        from spacesync_gui import SpaceSync
+        SpaceSync().mainloop()
+        return 0
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.action:
+        parser.error(tr('cli_missing_action'))
+    if args.pdf is not None and args.action != 'manual':
+        parser.error(tr('cli_pdf_manual_only'))
+    try:
+        # Load first, then override only explicitly supplied command-line options.
+        if args.language is not None:
+            translator.select('' if args.language == 'system' else args.language)
+        settings = load_settings(args.config.expanduser())
+        language = args.language if args.language is not None else settings.get('language', '')
+        language = '' if language == 'system' else language
+        translator.select(language)
+        resolved = {
+            'archive': args.archive if args.archive is not None else settings.get('archive', ''),
+            'directory': args.directory if args.directory is not None else settings.get('directory', ''),
+            'clear': args.clear if args.clear is not None else settings.get('clear', False),
+            'language': language,
+        }
+        if args.action == 'manual':
+            if args.pdf is not None:
+                export_manual_pdf(args.pdf.expanduser(), translator)
+                print(tr('pdf_saved', path=args.pdf))
             else:
-                self.output.configure(state='normal')
-                self.output.insert('end', text + '\n')
-                self.output.see('end')
-                self.output.configure(state='disabled')
-        self.after(100, self.poll)
-
-    def close(self):
-        if self.busy:
-            messagebox.showinfo(tr('busy_title'), tr('wait'))
+                print('SpaceSync - ' + tr('manual_title'))
+                for heading, body in manual_sections(translator):
+                    print(f'\n{heading}\n{body}')
         else:
-            if not self.persist_settings():
-                messagebox.showerror(tr('save_title'),
-                                     tr('save_failed'))
-                return
-            self.destroy()
+            if not resolved['archive'].strip() or not resolved['directory'].strip():
+                raise ValueError(tr('enter_paths'))
+            archive = Path(resolved['archive'].strip()).expanduser()
+            directory = Path(resolved['directory'].strip()).expanduser()
+            if args.action in ('archive', 'create'):
+                create_archive(archive, directory, print)
+            else:
+                extract_archive(archive, directory, resolved['clear'], print)
+        if args.save_settings:
+            save_settings(args.config.expanduser(), resolved)
+    except ImportError as error:
+        print(tr('error', error=error), file=sys.stderr)
+        return 1
+    except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, shutil.Error) as error:
+        print(tr('error', error=error), file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == '__main__':
-    SpaceSync().mainloop()
+    # Share the core module with the lazily imported GUI.
+    sys.modules.setdefault('spacesync', sys.modules[__name__])
+    raise SystemExit(main())
